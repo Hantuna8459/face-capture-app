@@ -1,0 +1,22 @@
+# dependencies
+node_modules/
+
+# next.js
+.next/
+out/
+
+# production
+build/
+dist/
+
+# local env
+.env
+.env*.local
+
+# runtime output
+recordings/
+*.log
+
+# system files
+.DS_Store
+Thumbs.db
