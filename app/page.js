@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task";
 const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm";
-const STEP_HOLD_MS = 650;
+const STEP_HOLD_MS = 1000;
 
 const RECORDING_FORMATS = [
   {
@@ -47,6 +47,10 @@ function getExtensionFromMimeType(type) {
 
 function getSupportedMimeType() {
   return getSupportedFormats()[0]?.mimeType || "";
+}
+
+function getStepLabel(stepId) {
+  return FACE_STEPS.find((step) => step.id === stepId)?.label || "action";
 }
 
 function formatElapsed(ms) {
@@ -110,11 +114,8 @@ function analyzeFace(landmarks, currentStepId, completedSteps) {
   const centerX = bounds.minX + width / 2;
   const centerY = bounds.minY + height / 2;
   const nose = landmarks[1] || landmarks[4] || landmarks[0];
-  const chin = landmarks[152] || landmarks[175] || landmarks[0];
-  const forehead = landmarks[10] || landmarks[151] || landmarks[0];
   const yaw = (nose.x - centerX) / Math.max(width, 0.001);
   const pitch = (nose.y - centerY) / Math.max(height, 0.001);
-  const verticalSpan = Math.abs(chin.y - forehead.y) / Math.max(height, 0.001);
 
   const warnings = [];
   if (bounds.minX < 0.06) warnings.push("Move right");
@@ -140,8 +141,8 @@ function analyzeFace(landmarks, currentStepId, completedSteps) {
     center: centered,
     left: centered && yaw > 0.14 && Math.abs(pitch) < 0.18,
     right: centered && yaw < -0.14 && Math.abs(pitch) < 0.18,
-    up: centered && pitch < -0.14 && Math.abs(yaw) < 0.13 && verticalSpan > 0.62,
-    down: centered && pitch > 0.14 && Math.abs(yaw) < 0.13,
+    up: centered && pitch < -0.09 && Math.abs(yaw) < 0.15,
+    down: centered && pitch > 0.12 && Math.abs(yaw) < 0.15,
   };
 
   let completed = [...completedSteps];
@@ -214,6 +215,7 @@ export default function Home() {
   const streamRef = useRef(null);
   const recorderRef = useRef(null);
   const chunksRef = useRef([]);
+  const segmentChunksRef = useRef([]);
   const animationRef = useRef(null);
   const timerRef = useRef(null);
   const startedAtRef = useRef(0);
@@ -222,6 +224,11 @@ export default function Home() {
   const faceStepRef = useRef("center");
   const completedStepsRef = useRef([]);
   const poseHoldRef = useRef({ stepId: "", startedAt: 0 });
+  const segmentRecordingRef = useRef(false);
+  const activeSegmentRef = useRef("");
+  const commitSegmentRef = useRef(false);
+  const capturedMsRef = useRef(0);
+  const segmentStartedAtRef = useRef(0);
   const lastFaceUiUpdateRef = useRef(0);
   const recordingRef = useRef(false);
   const savingRef = useRef(false);
@@ -288,7 +295,7 @@ export default function Home() {
       cancelAnimationFrame(animationRef.current);
       clearInterval(timerRef.current);
       faceLandmarkerRef.current?.close();
-      if (recorderRef.current?.state === "recording") {
+      if (recorderRef.current && recorderRef.current.state !== "inactive") {
         recorderRef.current.stop();
       }
     };
@@ -473,6 +480,12 @@ export default function Home() {
     faceStepRef.current = "center";
     completedStepsRef.current = [];
     poseHoldRef.current = { stepId: "", startedAt: 0 };
+    segmentRecordingRef.current = false;
+    activeSegmentRef.current = "";
+    commitSegmentRef.current = false;
+    segmentChunksRef.current = [];
+    capturedMsRef.current = 0;
+    segmentStartedAtRef.current = 0;
     faceStateRef.current = nextState;
     setFaceState(nextState);
   }
@@ -488,6 +501,7 @@ export default function Home() {
     setCameraReady(false);
     setRecording(false);
     recordingRef.current = false;
+    segmentRecordingRef.current = false;
     resetGuideState(nextState);
   }
 
@@ -504,6 +518,7 @@ export default function Home() {
 
   function applyPoseHold(nextState) {
     if (!nextState.found || !nextState.ready || !nextState.poseMatched) {
+      pauseRecordingSegment(nextState.found ? "Waiting for action" : "Waiting for face");
       poseHoldRef.current = { stepId: "", startedAt: 0 };
       return nextState;
     }
@@ -513,16 +528,18 @@ export default function Home() {
 
     if (hold.stepId !== nextState.stepId) {
       poseHoldRef.current = { stepId: nextState.stepId, startedAt: now };
+      startRecording(nextState.stepId);
       return {
         ...nextState,
-        detail: "Hold steady for a moment.",
+        detail: "Hold steady for 1 second to capture this action.",
       };
     }
 
     if (now - hold.startedAt < STEP_HOLD_MS) {
+      startRecording(nextState.stepId);
       return {
         ...nextState,
-        detail: "Hold steady for a moment.",
+        detail: "Hold steady for 1 second to capture this action.",
       };
     }
 
@@ -534,6 +551,7 @@ export default function Home() {
     const nextStep = FACE_STEPS.find((step) => !completed.includes(step.id));
     const stepId = nextStep?.id || nextState.stepId;
     poseHoldRef.current = { stepId: "", startedAt: 0 };
+    pauseRecordingSegment(`Captured ${getStepLabel(nextState.stepId)}`, true);
 
     return {
       ...nextState,
@@ -550,80 +568,130 @@ export default function Home() {
   function syncAutoRecording(nextState) {
     const allStepsDone = nextState.completed.length === FACE_STEPS.length;
 
-    if (allStepsDone && recordingRef.current) {
+    if (
+      allStepsDone &&
+      recorderRef.current &&
+      recorderRef.current.state !== "inactive" &&
+      !commitSegmentRef.current &&
+      !savingRef.current
+    ) {
       completedSessionRef.current = true;
       stopRecording();
       return;
     }
 
-    if (!nextState.ready && !recordingRef.current && !savingRef.current) {
+    if (!nextState.ready && !segmentRecordingRef.current && !savingRef.current) {
+      completedSessionRef.current = false;
+    }
+  }
+
+  function startRecording(stepId) {
+    if (
+      !streamRef.current ||
+      savingRef.current ||
+      completedSessionRef.current ||
+      commitSegmentRef.current
+    ) {
+      return;
+    }
+
+    if (segmentRecordingRef.current) {
+      return;
+    }
+
+    if (!recorderRef.current || recorderRef.current.state === "inactive") {
+      chunksRef.current = [];
+      capturedMsRef.current = 0;
+      setElapsed("00:00");
+      setSavedFile(null);
+
+      const selectedFormat = supportedFormatsRef.current.find(
+        (format) => format.id === formatIdRef.current,
+      );
+      const mimeType = selectedFormat?.mimeType || getSupportedMimeType();
+      const recorder = new MediaRecorder(
+        streamRef.current,
+        mimeType ? { mimeType } : undefined,
+      );
+
+      recorder.addEventListener("dataavailable", (event) => {
+        if (event.data.size > 0) {
+          segmentChunksRef.current.push(event.data);
+        }
+      });
+
+      recorder.addEventListener("stop", saveRecording);
+      recorder.start(100);
+      recorder.pause();
+      recorderRef.current = recorder;
       completedSessionRef.current = false;
     }
 
-    if (
-      nextState.ready &&
-      !allStepsDone &&
-      !recordingRef.current &&
-      !savingRef.current &&
-      !completedSessionRef.current
-    ) {
-      startRecording();
+    if (recorderRef.current.state === "paused") {
+      recorderRef.current.resume();
     }
+
+    activeSegmentRef.current = stepId;
+    commitSegmentRef.current = false;
+    segmentChunksRef.current = [];
+    segmentStartedAtRef.current = Date.now();
+    segmentRecordingRef.current = true;
+    recordingRef.current = true;
+    setRecording(true);
+    setStatus(`Capturing ${getStepLabel(stepId)}`);
   }
 
-  function startRecording() {
-    if (!streamRef.current || recordingRef.current || savingRef.current) {
+  function pauseRecordingSegment(nextStatus = "Waiting for action", commit = false) {
+    if (!segmentRecordingRef.current) {
       return;
     }
 
-    chunksRef.current = [];
-    completedStepsRef.current = [];
-    faceStepRef.current = "center";
-    poseHoldRef.current = { stepId: "", startedAt: 0 };
-    completedSessionRef.current = false;
-    setSavedFile(null);
+    const capturedMs = Date.now() - segmentStartedAtRef.current;
+    if (commit) {
+      capturedMsRef.current += capturedMs;
+    }
+    segmentStartedAtRef.current = 0;
+    activeSegmentRef.current = "";
+    segmentRecordingRef.current = false;
+    recordingRef.current = false;
+    setElapsed(formatElapsed(capturedMsRef.current));
+    setRecording(false);
+    setStatus(nextStatus);
 
-    const selectedFormat = supportedFormatsRef.current.find(
-      (format) => format.id === formatIdRef.current,
-    );
-    const mimeType = selectedFormat?.mimeType || getSupportedMimeType();
-    const recorder = new MediaRecorder(
-      streamRef.current,
-      mimeType ? { mimeType } : undefined,
-    );
+    if (recorderRef.current?.state === "recording") {
+      recorderRef.current.requestData();
+      recorderRef.current.pause();
+    }
 
-    recorder.addEventListener("dataavailable", (event) => {
-      if (event.data.size > 0) {
-        chunksRef.current.push(event.data);
-      }
-    });
-
-    recorder.addEventListener("stop", saveRecording);
-    recorder.start();
-    recorderRef.current = recorder;
-
-    startedAtRef.current = Date.now();
-    setElapsed("00:00");
-    timerRef.current = setInterval(() => {
-      setElapsed(formatElapsed(Date.now() - startedAtRef.current));
-    }, 250);
-
-    recordingRef.current = true;
-    setRecording(true);
-    setStatus("Auto recording");
+    if (commit) {
+      const committedChunks = segmentChunksRef.current;
+      commitSegmentRef.current = true;
+      setTimeout(() => {
+        chunksRef.current.push(...committedChunks);
+        if (segmentChunksRef.current === committedChunks) {
+          segmentChunksRef.current = [];
+        }
+        commitSegmentRef.current = false;
+      }, 120);
+    } else {
+      segmentChunksRef.current = [];
+    }
   }
 
   function stopRecording() {
-    if (!recordingRef.current) {
+    if (!recorderRef.current || recorderRef.current.state === "inactive") {
       return;
     }
 
-    if (recorderRef.current?.state === "recording") {
+    pauseRecordingSegment("Saving recording");
+
+    if (recorderRef.current.state !== "inactive") {
       recorderRef.current.stop();
     }
 
     clearInterval(timerRef.current);
     recordingRef.current = false;
+    segmentRecordingRef.current = false;
     savingRef.current = true;
     setRecording(false);
     setSaving(true);
