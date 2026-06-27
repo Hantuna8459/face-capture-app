@@ -137,9 +137,9 @@ function analyzeFace(landmarks, currentStepId, completedSteps) {
     bounds.maxY <= 0.96;
 
   const stepChecks = {
-    center: centered && Math.abs(yaw) < 0.045 && Math.abs(pitch) < 0.055,
-    left: centered && yaw > 0.16 && Math.abs(pitch) < 0.16,
-    right: centered && yaw < -0.16 && Math.abs(pitch) < 0.16,
+    center: centered,
+    left: centered && yaw > 0.14 && Math.abs(pitch) < 0.18,
+    right: centered && yaw < -0.14 && Math.abs(pitch) < 0.18,
     up: centered && pitch < -0.14 && Math.abs(yaw) < 0.13 && verticalSpan > 0.62,
     down: centered && pitch > 0.14 && Math.abs(yaw) < 0.13,
   };
@@ -173,6 +173,39 @@ function analyzeFace(landmarks, currentStepId, completedSteps) {
       pitch,
     },
   };
+}
+
+function drawFaceLineBorder(ctx, rect, state) {
+  const color = state.ready
+    ? "rgba(117, 222, 195, 0.92)"
+    : "rgba(255, 207, 90, 0.92)";
+  const centerX = rect.x + rect.width / 2;
+  const centerY = rect.y + rect.height / 2;
+  const radiusX = rect.width / 2;
+  const radiusY = rect.height / 2;
+  const tickLength = Math.min(rect.width, rect.height) * 0.09;
+
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([9, 9]);
+  ctx.beginPath();
+  ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.setLineDash([]);
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(centerX - tickLength, rect.y);
+  ctx.lineTo(centerX + tickLength, rect.y);
+  ctx.moveTo(centerX - tickLength, rect.y + rect.height);
+  ctx.lineTo(centerX + tickLength, rect.y + rect.height);
+  ctx.moveTo(rect.x, centerY - tickLength);
+  ctx.lineTo(rect.x, centerY + tickLength);
+  ctx.moveTo(rect.x + rect.width, centerY - tickLength);
+  ctx.lineTo(rect.x + rect.width, centerY + tickLength);
+  ctx.stroke();
+  ctx.restore();
 }
 
 export default function Home() {
@@ -325,20 +358,13 @@ export default function Home() {
 
       if (showGuide) {
         const safe = {
-          x: rect.width * 0.24,
-          y: rect.height * 0.14,
-          width: rect.width * 0.52,
-          height: rect.height * 0.78,
+          x: rect.width * 0.28,
+          y: rect.height * 0.12,
+          width: rect.width * 0.44,
+          height: rect.height * 0.76,
         };
 
-        ctx.save();
-        ctx.strokeStyle = faceStateRef.current.ready
-          ? "rgba(117, 222, 195, 0.9)"
-          : "rgba(255, 207, 90, 0.9)";
-        ctx.lineWidth = 2;
-        ctx.setLineDash([8, 8]);
-        ctx.strokeRect(safe.x, safe.y, safe.width, safe.height);
-        ctx.restore();
+        drawFaceLineBorder(ctx, safe, faceStateRef.current);
       }
 
       try {
@@ -372,12 +398,24 @@ export default function Home() {
             const y = bounds.minY * rect.height;
             const width = (bounds.maxX - bounds.minX) * rect.width;
             const height = (bounds.maxY - bounds.minY) * rect.height;
+            const centerX = x + width / 2;
+            const centerY = y + height / 2;
 
             ctx.save();
             ctx.strokeStyle = guidedState.ready ? "#75dec3" : "#ffcf5a";
             ctx.lineWidth = 3;
             ctx.setLineDash([]);
-            ctx.strokeRect(x, y, width, height);
+            ctx.beginPath();
+            ctx.ellipse(
+              centerX,
+              centerY,
+              Math.max(width * 0.62, 18),
+              Math.max(height * 0.58, 24),
+              0,
+              0,
+              Math.PI * 2,
+            );
+            ctx.stroke();
             ctx.fillStyle = guidedState.ready ? "#75dec3" : "#ffcf5a";
             for (const point of face.filter((_, index) => index % 18 === 0)) {
               ctx.beginPath();
@@ -635,10 +673,42 @@ export default function Home() {
         <video ref={videoRef} className="camera" autoPlay muted playsInline />
         <canvas ref={canvasRef} className="overlay" aria-hidden="true" />
         {(cameraReady || sessionDone) && (
-          <div className={`screen-guide ${faceState.ready ? "ready" : faceState.found ? "warn" : ""}`}>
-            <strong>{faceState.instruction}</strong>
-            <span>{faceState.detail}</span>
-          </div>
+          <>
+            <div className="screen-progress" aria-label="On-screen recording progress">
+              <div className="screen-status">
+                <span className={`status-dot ${statusClass}`} />
+                <span>{status}</span>
+                <time dateTime={`PT${elapsed}S`}>{elapsed}</time>
+              </div>
+              <div className="screen-step-list" aria-label="Face motion progress">
+                {FACE_STEPS.map((step, index) => {
+                  const done = faceState.completed.includes(step.id);
+                  const active = faceState.stepId === step.id && !done;
+
+                  return (
+                    <span
+                      key={step.id}
+                      className={[
+                        "screen-step",
+                        done ? "done" : "",
+                        active ? "active" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                    >
+                      <span>{done ? "OK" : index + 1}</span>
+                      {step.label}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className={`screen-guide ${faceState.ready ? "ready" : faceState.found ? "warn" : ""}`}>
+              <strong>{faceState.instruction}</strong>
+              <span>{faceState.detail}</span>
+            </div>
+          </>
         )}
         {!cameraReady && !sessionDone && (
           <div className="empty-state">

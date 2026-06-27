@@ -60,6 +60,85 @@ select {
   pointer-events: none;
 }
 
+.screen-progress {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  z-index: 2;
+  display: grid;
+  gap: 10px;
+  width: min(900px, calc(100% - 32px));
+  transform: translateX(-50%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  padding: 12px;
+  color: #f5f1e8;
+  background: rgba(10, 12, 15, 0.76);
+  backdrop-filter: blur(10px);
+}
+
+.screen-status {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  color: #d7cdbe;
+  font-size: 0.9rem;
+}
+
+.screen-step-list {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.screen-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: #d7cdbe;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.86rem;
+  white-space: nowrap;
+}
+
+.screen-step span {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 999px;
+  color: #101315;
+  background: #8d928d;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.screen-step.active {
+  border-color: rgba(255, 207, 90, 0.78);
+  color: #ffcf5a;
+  background: rgba(255, 207, 90, 0.1);
+}
+
+.screen-step.active span {
+  background: #ffcf5a;
+}
+
+.screen-step.done {
+  border-color: rgba(117, 222, 195, 0.7);
+  color: #75dec3;
+  background: rgba(117, 222, 195, 0.1);
+}
+
+.screen-step.done span {
+  background: #75dec3;
+}
+
 .screen-guide {
   position: absolute;
   left: 50%;
@@ -333,5 +412,30 @@ select {
 
   .stage {
     min-height: 55vh;
+  }
+
+  .screen-progress {
+    top: 12px;
+    gap: 8px;
+    width: calc(100% - 24px);
+    padding: 10px;
+  }
+
+  .screen-step-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .screen-step {
+    min-height: 34px;
+    font-size: 0.8rem;
+  }
+
+  .screen-guide {
+    bottom: 12px;
+    padding: 12px;
+  }
+
+  .screen-guide strong {
+    font-size: 1.08rem;
   }
 }
